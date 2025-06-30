@@ -2,6 +2,8 @@
 Data/
 Data_Used/
 
+Exploration/Fan_MSA_Matching.ipynb
+
 # Ignore virtual environment
 .venv/
 
