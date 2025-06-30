@@ -14,56 +14,6 @@ import os
 from pandas.tseries.offsets import DateOffset
 from sklearn.metrics import classification_report
 
-
-
-# def add_next_state(df, months_forward=12):
-#     """
-#     Adds a 'next_state' column based on the most severe state that occurs
-#     in the future months_forward period after each row's reporting_period.
-
-#     Priority: Foreclosure > Default > Prepaid > Current
-
-#     Parameters:
-#         df (pd.DataFrame): Must include ['Loan Number', 'reporting_period', 'state']
-#         months_forward (int): How far ahead (in months) to look for state changes
-
-#     Returns:
-#         pd.DataFrame: Original DataFrame with added 'next_state' column
-#     """
-#     df = df.copy()
-#     df['Reporting Period Date'] = pd.to_datetime(df['Reporting Period Date'], errors='coerce')
-#     df = df.sort_values(by=['Loan Number', 'Reporting Period Date'])
-
-#     priority_order = ['Foreclosure', 'Fully Paid, Matured', 'Fully Paid, Prepaid', 'Default', 'Current']
-
-#     # Group by loan
-#     grouped = df.groupby('Loan Number')
-#     next_states = []
-
-#     for _, group in grouped:
-#         group = group.reset_index(drop=True)
-#         dates = group['Reporting Period Date']
-#         states = group['State']
-
-#         for i, this_date in enumerate(dates):
-#             window_end = this_date + DateOffset(months=months_forward)
-#             future_mask = (dates > this_date) & (dates <= window_end)
-#             future_states = states[future_mask].dropna().values
-
-#             # Start with the current state as fallback
-#             current_state = states[i]
-#             assigned_state = current_state
-
-#             for candidate in priority_order:
-#                 if candidate in future_states:
-#                     assigned_state = candidate
-#                     break
-
-#             next_states.append(assigned_state)
-
-#     df['Next State'] = next_states
-#     return df
-
 def add_next_state(df, months_forward = 12):
     """
     Vectorised, faster version of add_next_state with the IndexError fixed.
@@ -249,3 +199,44 @@ def train_model(X, y, X_train, y_train, X_test, y_test, le_state):
         plt.xlabel("True Next State")
         plt.ylabel("Current State")
         plt.show()
+
+def join_on_date(df1, df2, on_col1='date', on_col2='date', how='left', exact=True):
+    """
+    Joins df1 (more granular, e.g., monthly) with df2 (less granular, e.g., quarterly) on date columns.
+
+    Parameters:
+    - df1: DataFrame with more granular datetime values
+    - df2: DataFrame with less granular datetime values
+    - on_col1: column name in df1 to join on (this will be retained in output)
+    - on_col2: column name in df2 to join on
+    - how: type of join ('left', 'inner', etc.)
+    - exact: if True, join only on exact matches;
+             if False, join each row in df1 with the most recent date in df2 that is <= the df1 date
+
+    Returns:
+    - Merged DataFrame
+    """
+    df1 = df1.copy()
+    df2 = df2.copy()
+
+    df1[on_col1] = pd.to_datetime(df1[on_col1])
+    df2[on_col2] = pd.to_datetime(df2[on_col2])
+
+    if exact:
+        merged = pd.merge(df1, df2, left_on=on_col1, right_on=on_col2, how=how)
+    else:
+        df1 = df1.sort_values(on_col1)
+        df2 = df2.sort_values(on_col2)
+        merged = pd.merge_asof(
+            df1,
+            df2,
+            left_on=on_col1,
+            right_on=on_col2,
+            direction='backward'
+        )
+
+    # Drop the df2 join column if it's different
+    if on_col1 != on_col2 and on_col2 in merged.columns:
+        merged = merged.drop(columns=[on_col2])
+
+    return merged
