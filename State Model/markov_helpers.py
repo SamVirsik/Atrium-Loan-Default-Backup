@@ -12,6 +12,7 @@ from sklearn.metrics import accuracy_score
 import seaborn as sns
 import joblib
 import os
+import re
 from pandas.tseries.offsets import DateOffset
 from sklearn.metrics import classification_report
 
@@ -106,6 +107,27 @@ def downsample(df, n=750):
     return df_random
 
 def train_model(X, y, X_train, y_train, X_test, y_test, le_state):
+    sample_weights = compute_sample_weight(class_weight='balanced', y=y_train)
+
+    model = XGBClassifier(
+        objective='multi:softprob',
+        num_class=len(y.unique()),
+        eval_metric='mlogloss',
+        use_label_encoder=False,
+        n_jobs=-1,
+        max_depth=4,               # ↓ Lower tree depth = less overfitting
+        n_estimators=500,          # ↓ Fewer trees = faster, less prone to overfit
+        learning_rate=0.07,        # ↑ Slightly higher to compensate for fewer trees
+        subsample=0.7,             # ↓ Force more randomness
+        colsample_bytree=0.7,      # ↓ Force more randomness
+        gamma=5,                   # ↑ Require higher gain to split
+        min_child_weight=30        # ↑ Split only when large sample supports it
+    )
+
+    model.fit(X_train, y_train, sample_weight=sample_weights)
+    return model
+
+def train_model_old_2(X, y, X_train, y_train, X_test, y_test, le_state):
     sample_weights = compute_sample_weight(class_weight='balanced', y=y_train) #Punishing for getting wrong the more rare classes
 
     model = XGBClassifier(
@@ -331,3 +353,107 @@ def save_model(model, name):
     joblib.dump(model, path)
     model_size = os.path.getsize(path) / (1024 * 1024)  # in megabytes
     print(f"Model size: {model_size:.2f} MB")
+
+def clean_msa(msa):
+    msa = str(msa).strip().upper()
+
+    if "METROPOLITAN STATISTICAL AREA" not in msa:
+        return msa.title()
+
+    # Remove suffix
+    msa = msa.replace(" METROPOLITAN STATISTICAL AREA", "")
+
+    # Check for comma to separate city and state
+    if ',' in msa:
+        city_part, state_part = msa.rsplit(',', 1)
+        # Replace hyphens in both parts with spaces
+        city_clean = re.sub(r'-+', ' ', city_part.strip()).title()
+        state_clean = re.sub(r'-+', ' ', state_part.strip()).upper()
+        return f"{city_clean}, {state_clean}"
+    else:
+        # Fallback
+        return re.sub(r'-+', ' ', msa).title()
+
+def clean_MSA_naming(df, msa_col):
+    df['MSA_clean'] = df[msa_col].apply(clean_msa)
+    msa_corrections = {
+        'Aguadilla Isabela, PR': 'Aguadilla, PR',
+        'Albany Lebanon, OR': 'Albany, OR',
+        'Atlanta Sandy Springs Alpharetta, GA': 'Atlanta Sandy Springs Roswell, GA', #Not perfect
+        'Austin Round Rock Georgetown, TX': 'Austin Round Rock San Marcos, TX', #Not perfect
+        'Bakersfield, CA': 'Bakersfield Delano, CA',
+        'Birmingham Hoover, AL': 'Birmingham, AL',
+        'Blacksburg Christiansburg, VA': 'Blacksburg Christiansburg Radford, VA',
+        'Bloomsburg Berwick, PA': 'Scranton  Wilkes Barre, PA', #GPT beleives this is closest
+        'Bridgeport Stamford Norwalk, CT': 'Bridgeport Stamford Danbury, CT', 
+        'Brunswick, GA': 'Brunswick St. Simons, GA', 
+        'California Lexington Park, MD': 'Lexington Park, MD', 
+        'Carbondale Marion, IL': 'Cape Girardeau, MO IL', #GPT Believes this is closest
+        'Chambersburg Waynesboro, PA': 'Chambersburg, PA',
+        'Chicago Naperville Elgin, IL IN WI': 'Chicago Naperville Elgin, IL IN',
+        'Cleveland Elyria, OH': 'Cleveland, OH',
+        "Coeur D'Alene, ID": "Coeur d'Alene, ID",
+        'Cumberland, MD WV': 'Hagerstown Martinsburg, MD WV', #GPT
+        'Danville, IL': 'Champaign Urbana, IL', #GPT
+        'Dayton Kettering, OH': 'Dayton Kettering Beavercreek, OH',
+        'Denver Aurora Lakewood, CO': 'Denver Aurora Centennial, CO',
+        'East Stroudsburg, PA': 'Allentown Bethlehem Easton, PA NJ', #GPT
+        'Elizabethtown Fort Knox, KY': 'Elizabethtown, KY',
+        'Evansville, IN KY': 'Evansville, IN',
+        'Fairbanks, AK': 'Fairbanks College, AK',
+        'Fond Du Lac, WI': 'Fond du Lac, WI',
+        'Fort Collins, CO': 'Fort Collins Loveland, CO',
+        'Grand Rapids Kentwood, MI': 'Grand Rapids Wyoming Kentwood, MI',
+        'Greenville Anderson, SC': 'Greenville Anderson Greer, SC',
+        'Hartford East Hartford Middletown, CT': 'Hartford West Hartford East Hartford, CT',
+        'Hilton Head Island Bluffton, SC': 'Hilton Head Island Bluffton Port Royal, SC',
+        'Houma Thibodaux, LA': 'Houma Bayou Cane Thibodaux, LA',
+        'Houston The Woodlands Sugar Land, TX': 'Houston Pasadena The Woodlands, TX',
+        'Indianapolis Carmel Anderson, IN': 'Indianapolis Carmel Greenwood, IN',
+        'Joplin, MO': 'Joplin, MO KS',
+        'Kahului Wailuku Lahaina, HI': 'Kahului Wailuku, HI',
+        'Las Vegas Henderson Paradise, NV': 'Las Vegas Henderson North Las Vegas, NV',
+        'Longview, WA': 'Longview Kelso, WA',
+        'Madera, CA': 'Fresno, CA', #GPT
+        'Mcallen Edinburg Mission, TX': 'McAllen Edinburg Mission, TX',
+        'Miami Fort Lauderdale Pompano Beach, FL': 'Miami Fort Lauderdale West Palm Beach, FL', 
+        'Multiple Properties': 'Multiple Properties', #STILL AN ISSUE
+        'Muskegon, MI': 'Muskegon Norton Shores, MI',
+        'Myrtle Beach Conway North Myrtle Beach, SC NC': 'Myrtle Beach Conway North Myrtle Beach, SC',
+        'Nashville Davidson Murfreesboro Franklin, TN': 'Nashville Davidson  Murfreesboro  Franklin, TN',
+        'New Bern, NC': 'Greenville, NC', #GPT
+        'New Haven Milford, CT': 'New Haven, CT',
+        'New York Newark Jersey City, NY NJ PA': 'New York Newark Jersey City, NY NJ',
+        'Non Msa': 'Non Msa', #STILL AN ISSUE
+        'North Port Sarasota Bradenton, FL': 'North Port Bradenton Sarasota, FL',
+        'Norwich New London, CT': 'Norwich New London Willimantic, CT',
+        'Ocean City, NJ': 'Atlantic City Hammonton, NJ', #GPT
+        'Ogden Clearfield, UT': 'Ogden, UT',
+        'Omaha Council Bluffs, NE IA': 'Omaha, NE IA',
+        'Panama City, FL': 'Panama City Panama City Beach, FL',
+        'Pine Bluff, AR': 'Little Rock North Little Rock Conway, AR', #GPT
+        'Poughkeepsie Newburgh Middletown, NY': 'Kiryas Joel Poughkeepsie Newburgh, NY', 
+        'Provo Orem, UT': 'Provo Orem Lehi, UT',
+        'Racine, WI': 'Racine Mount Pleasant, WI',
+        'Salisbury, MD DE': 'Salisbury, MD',
+        'Salt Lake City, UT': 'Salt Lake City Murray, UT',
+        'San Francisco Oakland Berkeley, CA': 'San Francisco Oakland Fremont, CA',
+        'San German, PR': 'Mayagüez, PR', #GPT
+        'San Juan Bayamon Caguas, PR': 'San Juan Bayamón Caguas, PR',
+        'Scranton Wilkes Barre, PA': 'Scranton  Wilkes Barre, PA', 
+        'Sebastian Vero Beach, FL': 'Sebastian Vero Beach West Vero Corridor, FL',
+        'Sebring Avon Park, FL': 'Sebring, FL',
+        'Sioux Falls, SD': 'Sioux Falls, SD MN',
+        'Staunton, VA': 'Staunton Stuarts Draft, VA',
+        'Stockton, CA': 'Stockton Lodi, CA',
+        'The Villages, FL': 'Wildwood The Villages, FL',
+        'Vineland Bridgeton, NJ': 'Vineland, NJ',
+        'Virginia Beach Norfolk Newport News, VA NC': 'Virginia Beach Chesapeake Norfolk, VA NC',
+        'Wausau Weston, WI': 'Wausau, WI',
+        'Wenatchee, WA': 'Wenatchee East Wenatchee, WA',
+        'Worcester, MA CT': 'Worcester, MA',
+        'Youngstown Warren Boardman, OH PA': 'Youngstown Warren, OH'
+    }
+
+    df['MSA_clean'] = df['MSA_clean'].replace(msa_corrections)
+    return df
